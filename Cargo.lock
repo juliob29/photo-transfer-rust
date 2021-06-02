@@ -160,6 +160,7 @@ name = "image-transfer"
 version = "0.1.0"
 dependencies = [
  "image",
+ "question",
 ]
 
 [[package]]
@@ -273,6 +274,12 @@ dependencies = [
  "deflate",
  "miniz_oxide 0.3.7",
 ]
+
+[[package]]
+name = "question"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acbb3ede7a8f9a8ab89e714637f2cf40001b58f21340d4242b2f11533e65fa8d"
 
 [[package]]
 name = "rayon"
