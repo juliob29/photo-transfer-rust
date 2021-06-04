@@ -14,6 +14,7 @@ struct Cli {
     /// Directory containing photos to transfer
     source_directory: String, 
     destination_directory: String, 
+    error_directory: String, 
     /// New photo output type
     destination_file_type: String,
     /// Give time user to stop in between in batches
@@ -48,7 +49,7 @@ fn copy_file_error(source: &str, source_directory: &String, destination_director
   fs::copy(from, to).expect("Unable to copy to error directory. This is a fatal error.");
 }
 
-fn transform_directory(source_directory: &String, destination_directory: &String,  format: image::ImageFormat, batch_size : isize) -> Result<(), Error> {
+fn transform_directory(source_directory: &String, destination_directory: &String, error_directory : &String, format: image::ImageFormat, batch_size : isize) -> Result<(), Error> {
   let paths = fs::read_dir(source_directory)?;
 
   /* count is going to check for the batch size */
@@ -63,7 +64,7 @@ fn transform_directory(source_directory: &String, destination_directory: &String
     /* If you couldn't find a period, file extension is weird... */
     if dot_pos_opt.is_none() {
       println!("File {} did not have a period for file extension. Copying to error directory...", file_name);
-      copy_file_error(file_name, source_directory, destination_directory);
+      copy_file_error(file_name, source_directory, error_directory);
       continue;
     }
     /* Windows :Zone.Identifer is getting ignored here. Not adding this to error dir */
@@ -83,7 +84,7 @@ fn transform_directory(source_directory: &String, destination_directory: &String
 
     if !is_supported {
      println!("File: {}, has an extension {} that is not supported. Moving to errors directory.", file_name, file_extension);
-     copy_file_error(file_name, source_directory, destination_directory);
+     copy_file_error(file_name, source_directory, error_directory);
      continue;
     }
 
@@ -91,7 +92,7 @@ fn transform_directory(source_directory: &String, destination_directory: &String
       Ok(()) => {}, 
       Err(error) => {
         println!("File {} could not convert properly. Error: {}. Moving to errors directory.", file_name, error);
-        copy_file_error(file_name, source_directory, destination_directory);
+        copy_file_error(file_name, source_directory, error_directory);
       }
     }
 
@@ -115,12 +116,17 @@ fn transform_directory(source_directory: &String, destination_directory: &String
   Ok(())
 }
 
-fn validate_directory(directory_path : &String) {
+fn validate_directory(directory_path : &mut String) {
+  if directory_path.find('/').is_none() {
+    directory_path.push('/');
+  }
+
   let metadata = metadata(&directory_path);
   if metadata.is_err() {
     println!("The directory: {} does not exist. Exiting...", directory_path);
     exit(1);
   }
+
   if !metadata.unwrap().is_dir() {
     println!("The destination path: {} is not a directory", directory_path);
   }
@@ -132,19 +138,12 @@ fn main() {
 
   let mut source_directory = args.source_directory;
   let mut destination_directory = args.destination_directory;
-
-  /* For cases where directory in within cwd but no / appended */
-  if destination_directory.find('/').is_none() {
-    destination_directory.push('/');
-  }
-
-  if source_directory.find('/').is_none() {
-    source_directory.push('/');
-  }
+  let mut error_directory = args.error_directory;
 
   /* Ensure these directories exist */
-  validate_directory(&source_directory);
-  validate_directory(&destination_directory);
+  validate_directory(&mut source_directory);
+  validate_directory(&mut destination_directory);
+  validate_directory(&mut error_directory);
 
 
   let destination_file_extension = args.destination_file_type;
@@ -161,7 +160,7 @@ fn main() {
   };
 
   println!("Beginning photo transfer to given format: {}. Batch size: {}", destination_file_extension, batch_size);
-  let res = transform_directory(&source_directory, &destination_directory, output_format_type, batch_size);
+  let res = transform_directory(&source_directory, &destination_directory, &error_directory, output_format_type, batch_size);
 
   match res {
     Ok(()) => {}, 
