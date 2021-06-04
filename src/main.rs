@@ -3,13 +3,27 @@ extern crate question;
 use image::{ImageError, io::Reader as ImageReader};
 use core::panic;
 use std::io::{Error};
-use std::fs;
+use std::fs::{self, DirEntry};
+use std::process::exit;
 use question::{Answer, Question};
+use structopt::StructOpt;
+use std::fs::metadata;
 
+#[derive(Debug, StructOpt)]
+struct Cli {
+    /// Directory containing photos to transfer
+    source_directory: String, 
+    destination_directory: String, 
+    /// New photo output type
+    destination_file_type: String,
+    /// Give time user to stop in between in batches
+    #[structopt(short = "n")]
+    batch_size: Option<isize>
+}
 
 /* Loads in image located at 'file' path, and resaves it to results directory under the specified Image Format */
-fn transform_image(mut path_name : &str, mut file_name: &str, dot_pos: usize, format : image::ImageFormat) -> Result<(), ImageError> {
-  let original_image = ImageReader::open(path_name)?.decode()?;
+fn transform_image(file_entry : &DirEntry, destination_directory: &String, mut file_name: &str, dot_pos: usize, format : image::ImageFormat) -> Result<(), ImageError> {
+  let original_image = ImageReader::open(file_entry.path())?.decode()?;
 
   let new_file_extension = match format {
     image::ImageFormat::Png => ".png",
@@ -20,42 +34,38 @@ fn transform_image(mut path_name : &str, mut file_name: &str, dot_pos: usize, fo
   /* this is to get rid of the old extension */
   file_name = &file_name[0..dot_pos];
 
-  let output_file_name = format!("results/{}{}", file_name, new_file_extension);
+
+  let output_file_name = format!("{}{}{}", destination_directory, file_name, new_file_extension);
   original_image.save_with_format(output_file_name, format)?;
 
   Ok(())
 }
 
 /* copies the given file to the error directory. called on files with errors */
-fn copy_file_error(source: &str) {
-  let from = format!("photos/{}", source);
-  let to = format!("errors/{}", source);
+fn copy_file_error(source: &str, source_directory: &String, destination_directory: &String) {
+  let from = format!("{}{}", source_directory, source);
+  let to = format!("{}{}", destination_directory, source);
   fs::copy(from, to).expect("Unable to copy to error directory. This is a fatal error.");
 }
 
-fn transform_directory(directory: &String, format: image::ImageFormat, batch_size : isize) -> Result<(), Error> {
-  let paths = fs::read_dir(directory)?;
+fn transform_directory(source_directory: &String, destination_directory: &String,  format: image::ImageFormat, batch_size : isize) -> Result<(), Error> {
+  let paths = fs::read_dir(source_directory)?;
 
   /* count is going to check for the batch size */
   let mut count = 0;
   for path in paths {
     let curr_dir_entry = path?;
-    let curr_path = curr_dir_entry.path();
-
-    let curr_path_str = curr_path.to_str().unwrap();
-
-    /* this slices away the photos/ part of the file name, hence the use of a constant */
-    let file_name = &curr_path_str[7..];
+    let file_name_obj = curr_dir_entry.file_name();
+    let file_name = file_name_obj.to_str().unwrap();
 
     let dot_pos_opt = file_name.find("."); 
 
     /* If you couldn't find a period, file extension is weird... */
     if dot_pos_opt.is_none() {
-      println!("File {} did not have a period for file extension. Copying to error directory...", curr_path_str);
-      copy_file_error(file_name);
+      println!("File {} did not have a period for file extension. Copying to error directory...", file_name);
+      copy_file_error(file_name, source_directory, destination_directory);
       continue;
     }
-
     /* Windows :Zone.Identifer is getting ignored here. Not adding this to error dir */
     if file_name.find(":").is_some() {
       continue;
@@ -72,57 +82,72 @@ fn transform_directory(directory: &String, format: image::ImageFormat, batch_siz
     };
 
     if !is_supported {
-     println!("File: {}, has an extension {} that is not supported. Moving to errors directory.", curr_path_str, file_extension);
-     copy_file_error(file_name);
+     println!("File: {}, has an extension {} that is not supported. Moving to errors directory.", file_name, file_extension);
+     copy_file_error(file_name, source_directory, destination_directory);
      continue;
     }
 
-    match transform_image(curr_path_str, file_name, dot_pos, format) {
+    match transform_image(&curr_dir_entry, destination_directory, file_name, dot_pos, format) {
       Ok(()) => {}, 
       Err(error) => {
-        println!("File {} could not convert properly. Error: {}. Moving to errors directory.", curr_path_str, error);
-        copy_file_error(file_name);
+        println!("File {} could not convert properly. Error: {}. Moving to errors directory.", file_name, error);
+        copy_file_error(file_name, source_directory, destination_directory);
       }
     }
 
     /* finished another image successfully. increase batch size and confirm with user if batch size reached */
     count += 1;
-
     if count == batch_size {
       count = 0;
       let batch_continue = Question::new("Batch sized reached. Continue with yes. Stop transfer with no").confirm();
 
       match batch_continue {
-        Answer::YES => println!("Continuing..."),
+        Answer::YES => {},
         Answer::NO => {
           println!("Stopping transfer...");
           break;
         }
         _ => unreachable!(),
       }
-
       println!("Continuing...");
     }
   }
   Ok(())
 }
 
-fn main() {
-  let directory = String::from("photos/");
+fn validate_directory(directory_path : &String) {
+  let metadata = metadata(&directory_path);
+  if metadata.is_err() {
+    println!("The directory: {} does not exist. Exiting...", directory_path);
+    exit(1);
+  }
+  if !metadata.unwrap().is_dir() {
+    println!("The destination path: {} is not a directory", directory_path);
+  }
+}
 
-  loop {
-    let answer = Question::new("Welcome to Photo Transferer. Ensure that your photos are in the 'photos' directory. Ready?").confirm();
-    if let Answer::YES = answer {
-      break;
-    }
+fn main() {
+
+  let args = Cli::from_args();
+
+  let mut source_directory = args.source_directory;
+  let mut destination_directory = args.destination_directory;
+
+  /* For cases where directory in within cwd but no / appended */
+  if destination_directory.find('/').is_none() {
+    destination_directory.push('/');
   }
 
-  let destination_file_extension_answer = Question::new("What would you like to convert the photos to?").ask().unwrap();
+  if source_directory.find('/').is_none() {
+    source_directory.push('/');
+  }
 
-  let destination_file_extension = match destination_file_extension_answer {
-    Answer::RESPONSE(resp) => resp,
-    _ => unreachable!(),
-  };
+  /* Ensure these directories exist */
+  validate_directory(&source_directory);
+  validate_directory(&destination_directory);
+
+
+  let destination_file_extension = args.destination_file_type;
 
   let output_format_type = match destination_file_extension.as_str() {
     ".jpeg" => image::ImageFormat::Jpeg,
@@ -130,28 +155,20 @@ fn main() {
     _ => panic!("The given filetype: {} is not supported", destination_file_extension),
   };
 
-  let batch_question = Question::new("We can prepare your photos in batches.
-We can prepare a given number of photos, and stop and allow you to tell 
-us when to proceed. Would you like to use photo batches?").confirm();
-  
-  
-  let mut batch_size = -1;
-  if let Answer::YES = batch_question {
-    let size = Question::new("Enter a batch size").ask().unwrap();
-    if let Answer::RESPONSE(resp) = size {
-      batch_size = resp.parse::<isize>().unwrap();
-    }
-  }
+  let batch_size = match args.batch_size {
+    Some(val) => val, 
+    None => -1,
+  };
 
-  let res = transform_directory(&directory, output_format_type, batch_size);
+  println!("Beginning photo transfer to given format: {}. Batch size: {}", destination_file_extension, batch_size);
+  let res = transform_directory(&source_directory, &destination_directory, output_format_type, batch_size);
 
   match res {
     Ok(()) => {}, 
     Err(error) => {
-      println!("Error occured with transform directory.: {}. {}", directory, error)
+      println!("Error occured with transform directory.: {}. {}", source_directory, error)
     }
   }
-
   println!("Success!");
 }
 
