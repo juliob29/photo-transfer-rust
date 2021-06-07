@@ -23,16 +23,18 @@ struct Cli {
     batch_size: Option<isize>
 }
 
-fn transform_heic(file_entry : &DirEntry, output_file_name : &String) {
+fn transform_magick_fn(file_entry : &DirEntry, output_file_name : &String) {
   Command::new("convert")
   .arg(file_entry.path())
   .arg(output_file_name)
   .spawn()
-  .expect("Unable to run HEIC executable...");
+  .expect("Unable to run convert executable...")
+  .wait()
+  .expect("Convert did not exit successfully...");
 
 }
 /* Loads in image located at 'file' path, and resaves it to results directory under the specified Image Format */
-fn transform_image(file_entry : &DirEntry, destination_directory: &String, mut file_name: &str, dot_pos: usize, format : image::ImageFormat, is_heic : bool) -> Result<(), ImageError> {
+fn transform_image(file_entry : &DirEntry, destination_directory: &String, mut file_name: &str, dot_pos: usize, format : image::ImageFormat, transform_magick : bool) -> Result<(), ImageError> {
 
   let new_file_extension = match format {
     image::ImageFormat::Png => ".png",
@@ -46,8 +48,8 @@ fn transform_image(file_entry : &DirEntry, destination_directory: &String, mut f
   let output_file_name = format!("{}{}{}", destination_directory, file_name, new_file_extension);
 
   /* If heic, we transform differently than using ImageReader library. */
-  if is_heic {
-    transform_heic(file_entry, &output_file_name);  
+  if transform_magick {
+    transform_magick_fn(file_entry, &output_file_name);  
   } else {
     let original_image = ImageReader::open(file_entry.path())?.decode()?;
     original_image.save_with_format(output_file_name, format)?;
@@ -87,15 +89,18 @@ fn transform_directory(source_directory: &String, destination_directory: &String
     }
 
     let dot_pos = dot_pos_opt.unwrap();
-    let file_extension = &file_name[dot_pos..];
+    let mut file_extension = &file_name[dot_pos..];
+    let lower = file_extension.to_ascii_lowercase();
+    file_extension = lower.as_str();
+    
 
-    /* If file is heic, we convert in a special way inside transform_image */
-    let mut is_heic = false;
+    /* If file is png or heic, use magick which has better encoders for the cost of spawning a subprocess */
+    let mut transform_magick = false;
     let is_supported = match file_extension {
       ".jpg" => true, 
-      ".png" => true, 
       ".jpeg" => true, 
-      ".heic" => {is_heic = true; true},
+      ".png" => {transform_magick = true; true},
+      ".heic" => {transform_magick = true; true},
       _ => false
     };
 
@@ -105,7 +110,7 @@ fn transform_directory(source_directory: &String, destination_directory: &String
      continue;
     }
 
-    match transform_image(&curr_dir_entry, destination_directory, file_name, dot_pos, format, is_heic) {
+    match transform_image(&curr_dir_entry, destination_directory, file_name, dot_pos, format, transform_magick) {
       Ok(()) => {}, 
       Err(error) => {
         println!("File {} could not convert properly. Error: {}. Moving to errors directory.", file_name, error);
