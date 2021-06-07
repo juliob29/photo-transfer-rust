@@ -8,6 +8,7 @@ use std::process::exit;
 use question::{Answer, Question};
 use structopt::StructOpt;
 use std::fs::metadata;
+use std::process::Command;
 
 #[derive(Debug, StructOpt)]
 struct Cli {
@@ -22,9 +23,16 @@ struct Cli {
     batch_size: Option<isize>
 }
 
+fn transform_heic(file_entry : &DirEntry, output_file_name : &String) {
+  Command::new("convert")
+  .arg(file_entry.path())
+  .arg(output_file_name)
+  .spawn()
+  .expect("Unable to run HEIC executable...");
+
+}
 /* Loads in image located at 'file' path, and resaves it to results directory under the specified Image Format */
-fn transform_image(file_entry : &DirEntry, destination_directory: &String, mut file_name: &str, dot_pos: usize, format : image::ImageFormat) -> Result<(), ImageError> {
-  let original_image = ImageReader::open(file_entry.path())?.decode()?;
+fn transform_image(file_entry : &DirEntry, destination_directory: &String, mut file_name: &str, dot_pos: usize, format : image::ImageFormat, is_heic : bool) -> Result<(), ImageError> {
 
   let new_file_extension = match format {
     image::ImageFormat::Png => ".png",
@@ -35,9 +43,15 @@ fn transform_image(file_entry : &DirEntry, destination_directory: &String, mut f
   /* this is to get rid of the old extension */
   file_name = &file_name[0..dot_pos];
 
-
   let output_file_name = format!("{}{}{}", destination_directory, file_name, new_file_extension);
-  original_image.save_with_format(output_file_name, format)?;
+
+  /* If heic, we transform differently than using ImageReader library. */
+  if is_heic {
+    transform_heic(file_entry, &output_file_name);  
+  } else {
+    let original_image = ImageReader::open(file_entry.path())?.decode()?;
+    original_image.save_with_format(output_file_name, format)?;
+  }
 
   Ok(())
 }
@@ -75,10 +89,13 @@ fn transform_directory(source_directory: &String, destination_directory: &String
     let dot_pos = dot_pos_opt.unwrap();
     let file_extension = &file_name[dot_pos..];
 
+    /* If file is heic, we convert in a special way inside transform_image */
+    let mut is_heic = false;
     let is_supported = match file_extension {
       ".jpg" => true, 
       ".png" => true, 
       ".jpeg" => true, 
+      ".heic" => {is_heic = true; true},
       _ => false
     };
 
@@ -88,7 +105,7 @@ fn transform_directory(source_directory: &String, destination_directory: &String
      continue;
     }
 
-    match transform_image(&curr_dir_entry, destination_directory, file_name, dot_pos, format) {
+    match transform_image(&curr_dir_entry, destination_directory, file_name, dot_pos, format, is_heic) {
       Ok(()) => {}, 
       Err(error) => {
         println!("File {} could not convert properly. Error: {}. Moving to errors directory.", file_name, error);
@@ -134,6 +151,7 @@ fn validate_directory(directory_path : &mut String) {
 
 fn main() {
 
+
   let args = Cli::from_args();
 
   let mut source_directory = args.source_directory;
@@ -144,7 +162,6 @@ fn main() {
   validate_directory(&mut source_directory);
   validate_directory(&mut destination_directory);
   validate_directory(&mut error_directory);
-
 
   let destination_file_extension = args.destination_file_type;
 
